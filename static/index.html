@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+  <meta charset="UTF-8">
+  <title>Centerline</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+      background-color: #cccccc8e;
+    }
+
+    #results {
+      margin-top: 20px;
+      padding: 15px;
+      border: 1px solid #ccc;
+      background-color: #f9f9f9;
+      white-space: pre-wrap;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+
+    h2,
+    h3 {
+      color: #333;
+    }
+
+    button {
+      padding: 8px 16px;
+      margin-top: 10px;
+    }
+
+    #resultImage {
+      max-width: 100%;
+      border: 1px solid #ccc;
+      margin-top: 20px;
+
+
+    }
+
+    .image-row {
+      display: flex;
+      gap: 20px;
+      margin-top: 20px;
+    }
+
+    .image-row img {
+      max-width: 100%;
+      height: auto;
+      border: 1px solid #ccc;
+    }
+
+    .image-row div {
+      flex: 1;
+    }
+  </style>
+</head>
+
+<body>
+  <h2>Upload ảnh bản đồ</h2>
+  <form id="uploadForm">
+    <input type="file" name="image" accept="image/*" />
+    <button type="submit">Xử lý</button>
+  </form>
+
+  <h3>Ảnh gốc và ảnh đã xử lý:</h3>
+  <div class="image-row">
+    <div>
+      <p><strong>Ảnh chưa xử lý:</strong></p>
+      <img id="image" src="" />
+    </div>
+    <div>
+      <p><strong>Ảnh đã xử lý:</strong></p>
+      <img id="resultImage" src="" alt="Kết quả xử lý" />
+    </div>
+  </div>
+
+  <h3>Kết quả xử lý:</h3>
+  <div id="results">Chưa có kết quả.</div>
+
+  <script>
+    document.getElementById("uploadForm").onsubmit = async function (e) {
+      e.preventDefault();
+
+
+      const fileInput = document.querySelector("input[name='image']");
+      const file = fileInput.files[0];
+      const formData = new FormData();
+      formData.append("file", file);
+
+      // Hiển thị ảnh chưa xử lý
+      document.getElementById("image").src = URL.createObjectURL(file);
+
+      const res = await fetch("/process-image", {
+        method: "POST",
+        body: formData
+      });
+
+      const data = await res.json();
+      const resultBox = document.getElementById("results");
+      const resultImage = document.getElementById("resultImage");
+
+      let output = `🔹 Tìm được ${data.segments.length} đoạn centerline\n`;
+      data.segments.forEach((seg, i) => {
+        output += `Đoạn ${i + 1}: ${JSON.stringify(seg)}\n`;
+      });
+
+      output += `\n🔸 Tìm được ${data.junctions.length} nút giao\n`;
+      data.junctions.forEach((junc, i) => {
+        output += `Nút ${i + 1}: (${junc[0]}, ${junc[1]})\n`;
+      });
+
+      resultBox.textContent = output;
+      resultImage.src = data.image_url + '?t=' + new Date().getTime();
+    };
+  </script>
+</body>
+
+</html>
