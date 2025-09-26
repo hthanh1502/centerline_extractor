@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, send_from_directory
 import cv2
 import numpy as np
 import os
+import uuid
 from centerline_extractor import extract_centerline_and_junctions
 
 app = Flask(__name__, static_folder='static')
@@ -11,28 +12,41 @@ def serve_index():
     return send_from_directory(app.static_folder, 'index.html')
 
 @app.route('/process-image', methods=['POST'])
-
-
 def process_image():
-    # upload ảnh
-    file = request.files['file']
+    file = request.files.get('file')
+    if file is None:
+        return jsonify({"error": "No file uploaded"}), 400
+
     npimg = np.frombuffer(file.read(), np.uint8)
     img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-    cv2.imwrite("temp.jpg", img)
+    if img is None:
+        return jsonify({"error": "Invalid image"}), 400
 
-    segments, junctions = extract_centerline_and_junctions("temp.jpg", debug=False)
+    temp_path = "temp.jpg"
+    cv2.imwrite(temp_path, img)
+
+    segments, junctions, junction_midpoints = extract_centerline_and_junctions(
+        temp_path,
+        debug=False
+    )
 
     # Vẽ lên ảnh
-    for seg in segments:
+    vis = img.copy()
+    for i, seg in enumerate(segments):
         pts_np = np.array(seg, dtype=np.int32)
-        cv2.polylines(img, [pts_np], isClosed=False, color=(0, 255, 0), thickness=2)
+        np.random.seed(i)  # để màu ổn định giữa các lần chạy
+        color = tuple(int(c) for c in np.random.randint(0, 255, 3))
+        cv2.polylines(vis, [pts_np], isClosed=False, color=color, thickness=2)
+
 
     for p in junctions:
-        cv2.circle(img, tuple(p), 4, (0, 0, 255), -1)
+        cv2.circle(vis, tuple(p), 4, (0, 0, 255), -1)
 
-    # Lưu ảnh kết quả
+    for p in junction_midpoints:
+        cv2.circle(vis, tuple(p), 6, (0, 255, 255), -1)
+
     result_path = os.path.join(app.static_folder, "result.jpg")
-    cv2.imwrite(result_path, img)
+    cv2.imwrite(result_path, vis)
 
     def convert(obj):
         if isinstance(obj, np.generic):
@@ -44,13 +58,15 @@ def process_image():
         else:
             return obj
 
+    token = str(uuid.uuid4())
+
     return jsonify({
+        "token": token,
         "segments": convert(segments),
         "junctions": convert(junctions),
+        "junction_midpoints": convert(junction_midpoints),
         "image_url": "/static/result.jpg"
     })
 
 if __name__ == '__main__':
     app.run(debug=True)
-    # app.run(debug=True, port=8000)
-

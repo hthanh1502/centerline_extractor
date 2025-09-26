@@ -2,7 +2,11 @@ import cv2
 import numpy as np
 from skimage.morphology import skeletonize
 import math
+from collections import defaultdict
+from difflib import SequenceMatcher  
 
+
+# Hàm để gom các điểm gần nhau thành cụm
 def cluster_points(points, distance_threshold=10):
     points = np.array(points)
     if len(points) == 0:
@@ -21,6 +25,7 @@ def cluster_points(points, distance_threshold=10):
 
     return clusters
 
+# Hàm để tính góc giữa hai vector
 def angle_between(v1, v2):
     dot = v1[0]*v2[0] + v1[1]*v2[1]
     norm1 = math.hypot(*v1)
@@ -30,6 +35,7 @@ def angle_between(v1, v2):
     cosang = max(-1, min(1, dot/(norm1*norm2)))
     return math.degrees(math.acos(cosang))
 
+# Hàm để tách polyline thành các đoạn con dựa trên góc
 def split_polyline_by_angle(polyline, angle_threshold=100):
     if len(polyline) < 3:
         return [polyline]
@@ -51,6 +57,7 @@ def split_polyline_by_angle(polyline, angle_threshold=100):
         sub_polylines.append(current_line)
     return sub_polylines
 
+# Hàm chính để trích xuất centerline và nút giao
 def extract_centerline_and_junctions(image_path,
                                      color_min=(192,72,0),
                                      color_max=(243,242,219),
@@ -96,16 +103,104 @@ def extract_centerline_and_junctions(image_path,
 
     junction_points = cluster_points(all_vertices, distance_threshold=cluster_distance)
 
-    if debug:
+    # Tìm các điểm giữa ngã ba và ngã tư
+    junction_midpoints = []
+    for junc in junction_points:
+        connected = []
         for seg in all_sub_polylines:
+            for pt in (seg[0], seg[-1]):
+                if np.linalg.norm(np.array(pt) - np.array(junc)) < cluster_distance:
+                    connected.append(pt)
+                    break
+        if 3 <= len(connected) <= 4:
+            center = np.mean(connected, axis=0)
+            junction_midpoints.append((int(center[0]), int(center[1])))
+
+    # Loại bỏ full duplicate segments (như cũ)
+    all_endpoints = []
+    for sub in all_sub_polylines:
+        all_endpoints.append(sub[0])
+        all_endpoints.append(sub[-1])
+    endpoint_clusters = cluster_points(all_endpoints, distance_threshold=cluster_distance)
+    
+    # Hàm để tìm cụm gần nhất
+    def get_cluster(pt):
+        if not endpoint_clusters:
+            return 
+        dists = [np.linalg.norm(np.array(c) - np.array(pt)) for c in endpoint_clusters]
+        min_idx = np.argmin(dists)
+        return endpoint_clusters[min_idx]
+
+    seg_groups = defaultdict(list)
+    for sub in all_sub_polylines:
+        start_cluster = get_cluster(sub[0])
+        end_cluster = get_cluster(sub[-1])
+        key = tuple(sorted([start_cluster, end_cluster], key=lambda x: (x[0], x[1])))
+        seg_groups[key].append(sub)
+
+    unique_sub_polylines = []
+    for key, group in seg_groups.items():
+        longest = max(group, key=len)
+        unique_sub_polylines.append(longest)
+
+    #  Xử lý partial overlaps
+    def serialize_polyline(poly):
+        return ','.join([f"{x}:{y}" for x, y in poly])
+    # Hàm để tính tỉ lệ overlap giữa hai polyline
+    def overlap_ratio(a, b):
+        a_ser = serialize_polyline(a)
+        b_ser = serialize_polyline(b)
+        matcher = SequenceMatcher(None, a_ser, b_ser)
+        match = matcher.find_longest_match(0, len(a_ser), 0, len(b_ser))
+        return match.size / min(len(a_ser), len(b_ser)) if min(len(a_ser), len(b_ser)) > 0 else 0
+
+    # Sắp xếp theo độ dài giảm dần để ưu tiên giữ segments dài (super-segments), loại bỏ con nếu overlap cao
+    # Nếu muốn giữ atomic shorts, comment sort và thêm reverse=False hoặc sort tăng dần
+    unique_sub_polylines.sort(key=len, reverse=True)
+
+    kept_polylines = []
+    for poly in unique_sub_polylines:
+        if all(overlap_ratio(poly, k) < 0.5 for k in kept_polylines):  # Adjust threshold nếu cần (0.5 = 50% overlap)
+            kept_polylines.append(poly)
+
+    # Sắp xếp lại để output ổn định
+    kept_polylines.sort(key=lambda sub: (sub[0][0], sub[0][1]))
+
+    if debug:
+        for i, seg in enumerate(kept_polylines):
             pts_np = np.array(seg, dtype=np.int32)
-            color = tuple(int(c) for c in np.random.randint(0,255,3))
+            
+            # Tạo màu ngẫu nhiên cho mỗi đường
+            np.random.seed(i)  # để màu ổn định giữa các lần chạy
+            color = tuple(int(c) for c in np.random.randint(0, 255, 3))
+            
             cv2.polylines(vis, [pts_np], isClosed=False, color=color, thickness=2)
+    
         for p in junction_points:
-            cv2.circle(vis, p, 3, (255,0,0), -1)
+            cv2.circle(vis, p, 3, (255, 0, 0), -1)
+    
+        for p in junction_midpoints:
+            cv2.circle(vis, p, 6, (0, 255, 255), -1)
+    
         cv2.imshow("Skeleton centerline", skeleton_uint8)
-        cv2.imshow("Centerline + segments + nút giao", vis)
+        cv2.imshow("Centerline + segments + nút giao + midpoints", vis)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-    return all_sub_polylines, junction_points
+
+    # Cập nhật junction_midpoints nếu cần (dùng kept_polylines)
+    junction_midpoints = [] 
+    for junc in junction_points:
+        connected = []
+        for seg in kept_polylines:
+            for pt in (seg[0], seg[-1]):
+                if np.linalg.norm(np.array(pt) - np.array(junc)) < cluster_distance:
+                    connected.append(pt)
+                    break
+        connected = list(set(map(tuple, connected)))  
+        if 3 <= len(connected) <= 4:
+            center = np.mean(connected, axis=0)
+            junction_midpoints.append((int(center[0]), int(center[1])))
+
+    return kept_polylines, junction_points, junction_midpoints
+
