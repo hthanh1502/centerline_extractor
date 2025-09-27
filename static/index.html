@@ -89,7 +89,7 @@
       const resultBox = document.getElementById("results");
       const resultImage = document.getElementById("resultImage");
 
-      let output = `🔹 Token: ${data.token}\n`;
+      let output ;
       output += `🔹 Tìm được ${data.segments.length} đoạn centerline\n`;
       data.segments.forEach((seg, i) => {
         output += `Đường ${i + 1}: ${JSON.stringify(seg)}\n`;

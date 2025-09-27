@@ -38,6 +38,18 @@ def process_image():
         color = tuple(int(c) for c in np.random.randint(0, 255, 3))
         cv2.polylines(vis, [pts_np], isClosed=False, color=color, thickness=2)
 
+    for i, seg in enumerate(segments):
+        if len(seg) < 2:
+            continue  
+
+        # Tính điểm giữa đoạn
+        mid_idx = len(seg) // 2
+        mid_point = tuple(seg[mid_idx])
+        # mid_point = (mid_point[0], mid_point[1] - 10)
+
+
+        label = f"{i + 1}"
+        cv2.putText(vis, label, mid_point, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 1, cv2.LINE_AA)
 
     for p in junctions:
         cv2.circle(vis, tuple(p), 4, (0, 0, 255), -1)
