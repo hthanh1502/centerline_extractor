@@ -135,6 +135,7 @@ def extract_centerline_and_junctions(image_path, debug=False):
         simplified = simplify_segment(segment, epsilon=2.0)
         sampled_segments.append(simplified)
 
+    # Sắp xếp đoạn theo vị trí nút giao , hay nói cách khác là sọt
     junction_midpoints = [tuple(seg[len(seg)//2]) for seg in sampled_segments if len(seg) >= 2]
     sorted_data = sorted(zip(sampled_segments, junction_midpoints), key=lambda item: (item[1][1], item[1][0]))
     sampled_segments, junction_midpoints = zip(*sorted_data) if sorted_data else ([], [])

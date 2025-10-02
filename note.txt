@@ -22,6 +22,11 @@ API :
 
 
 
+// ngưỡng màu xám (gg map)
 
- color_min = np.array([192, 72, 0], dtype=np.uint8) # BGR
-    color_max = np.array([230, 242, 219], dtype=np.uint8)
+ color_min = np.array([170, 72, 0], dtype=np.uint8) # BGR
+ color_max = np.array([230, 242, 219], dtype=np.uint8)
+
+ // ngưỡng màu trắng (theo map sks)
+ color_min = np.array([240, 240, 240], dtype=np.uint8)
+color_max = np.array([255, 255, 255], dtype=np.uint8)
