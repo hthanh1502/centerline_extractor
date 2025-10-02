@@ -1,0 +1,27 @@
+//Cài thư viện cần thiết
+    - flask
+    - opencv-python
+    - scikit-image
+    - numpy
+
+->  pip install -r note.txt  
+
+
+// Run 
+
+->    python app.py
+
+//Port : localhost:5000
+
+API : 
+
+    + process-image : 
+        localhost:5000/process-image
+    + view result
+        localhost:5000/view-result 
+
+
+
+
+ color_min = np.array([192, 72, 0], dtype=np.uint8) # BGR
+    color_max = np.array([230, 242, 219], dtype=np.uint8)

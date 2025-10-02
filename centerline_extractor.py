@@ -9,8 +9,8 @@ def extract_centerline_and_junctions(image_path, debug=False):
         raise FileNotFoundError("Không tìm thấy ảnh gốc.")
 
     # Lọc màu
-    color_min = np.array([192, 72, 0], dtype=np.uint8)
-    color_max = np.array([243, 242, 219], dtype=np.uint8)
+    color_min = np.array([170, 72, 0], dtype=np.uint8) # BGR
+    color_max = np.array([230, 242, 219], dtype=np.uint8)
     mask = cv2.inRange(img, color_min, color_max)
     filtered = cv2.bitwise_and(img, img, mask=mask)
 

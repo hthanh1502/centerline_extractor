@@ -3,13 +3,24 @@ import cv2
 import numpy as np
 import os
 import uuid
+import json
+from datetime import datetime
 from centerline_extractor import extract_centerline_and_junctions
 
 app = Flask(__name__, static_folder='static')
 
+IMG_DIR = os.path.join(app.static_folder, 'output', 'img')
+JSON_DIR = os.path.join(app.static_folder, 'output', 'json')
+MAP_PATH = os.path.join(app.static_folder, 'output', 'token_map.json')
+
+# Tạo thư mục nếu chưa có
+os.makedirs(IMG_DIR, exist_ok=True)
+os.makedirs(JSON_DIR, exist_ok=True)
+
 @app.route('/')
 def serve_index():
     return send_from_directory(app.static_folder, 'index.html')
+
 
 @app.route('/process-image', methods=['POST'])
 def process_image():
@@ -30,34 +41,25 @@ def process_image():
         debug=False
     )
 
-    # Vẽ lên ảnh
     vis = img.copy()
     for i, seg in enumerate(segments):
         pts_np = np.array(seg, dtype=np.int32)
-        np.random.seed(i)  # để màu ổn định giữa các lần chạy
+        np.random.seed(i)
         color = tuple(int(c) for c in np.random.randint(0, 255, 3))
         cv2.polylines(vis, [pts_np], isClosed=False, color=color, thickness=2)
 
     for i, seg in enumerate(segments):
         if len(seg) < 2:
-            continue  
-
-        # Tính điểm giữa đoạn
+            continue
         mid_idx = len(seg) // 2
         mid_point = tuple(seg[mid_idx])
-        # mid_point = (mid_point[0], mid_point[1] - 10)
-
-
         label = f"{i + 1}"
         cv2.putText(vis, label, mid_point, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 1, cv2.LINE_AA)
 
-    for p in junctions:
-        cv2.circle(vis, tuple(p), 1, (255, 0, 0), -1) # Vẽ điểm đỏ nhỏ hơn
-
-    for p in junction_midpoints:
-        cv2.circle(vis, tuple(p), 4, (0, 255, 0), -1) # Vẽ điểm vàng lớn hơn
-
-    result_path = os.path.join(app.static_folder, "result.jpg")
+    token = str(uuid.uuid4())
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"{date_str}_{token}.jpg"
+    result_path = os.path.join(IMG_DIR, filename)
     cv2.imwrite(result_path, vis)
 
     def convert(obj):
@@ -70,16 +72,58 @@ def process_image():
         else:
             return obj
 
-    token = str(uuid.uuid4())
+    json_path = os.path.join(JSON_DIR, f"{token}.json")
+    with open(json_path, "w") as f:
+        json.dump({
+            "segments": convert(segments)
+        }, f)
+
+    token_map = {}
+    if os.path.exists(MAP_PATH):
+        with open(MAP_PATH, "r") as f:
+            token_map = json.load(f)
+    token_map[token] = filename
+    with open(MAP_PATH, "w") as f:
+        json.dump(token_map, f)
 
     return jsonify({
         "token": token,
         "segments": convert(segments),
-        "junctions": convert(junctions),
-        "junction_midpoints": convert(junction_midpoints),
-        "image_url": "/static/result.jpg"
+        "image_url": f"/static/output/img/{filename}"
     })
+
+
+@app.route('/view-result', methods=['POST'])
+def view_result_by_token():
+    data = request.get_json()
+    token = data.get("token")
+
+    if not token:
+        return jsonify({"error": "Thiếu token trong yêu cầu"}), 400
+
+    if not os.path.exists(MAP_PATH):
+        return jsonify({"error": "Không có ánh xạ token"}), 404
+
+    with open(MAP_PATH, "r") as f:
+        token_map = json.load(f)
+
+    filename = token_map.get(token)
+    if not filename:
+        return jsonify({"error": "Không tìm thấy kết quả với token này"}), 404
+
+    json_path = os.path.join(JSON_DIR, f"{token}.json")
+    if not os.path.exists(json_path):
+        return jsonify({"error": "Không tìm thấy dữ liệu phân tích"}), 404
+
+    with open(json_path, "r") as f:
+        analysis_data = json.load(f)
+
+    return jsonify({
+        "token": token,
+        "image_url": f"/static/output/img/{filename}",
+        "segments": analysis_data.get("segments", [])
+    })
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
-
