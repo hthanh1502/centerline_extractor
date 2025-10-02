@@ -1,111 +1,147 @@
 import cv2
 import numpy as np
+import random
 from skimage.morphology import skeletonize
-import math
 
-def cluster_points(points, distance_threshold=10):
-    points = np.array(points)
-    if len(points) == 0:
-        return []
-    clusters = []
-    visited = np.zeros(len(points), dtype=bool)
+def extract_centerline_and_junctions(image_path, debug=False):
+    # --- Tham số cấu hình ---
+    color_min = (192, 72, 0)
+    color_max = (243, 242, 219)
+    min_area = 500
+    sample_spacing = 5
+    group_radius = 5
 
-    for i, p in enumerate(points):
-        if visited[i]:
-            continue
-        cluster_idx = np.linalg.norm(points - p, axis=1) < distance_threshold
-        visited[cluster_idx] = True
-        cluster_points = points[cluster_idx]
-        center = cluster_points.mean(axis=0)
-        clusters.append((int(center[0]), int(center[1])))
-
-    return clusters
-
-def angle_between(v1, v2):
-    dot = v1[0]*v2[0] + v1[1]*v2[1]
-    norm1 = math.hypot(*v1)
-    norm2 = math.hypot(*v2)
-    if norm1*norm2 == 0:
-        return 0
-    cosang = max(-1, min(1, dot/(norm1*norm2)))
-    return math.degrees(math.acos(cosang))
-
-def split_polyline_by_angle(polyline, angle_threshold=100):
-    if len(polyline) < 3:
-        return [polyline]
-    sub_polylines = []
-    current_line = [polyline[0]]
-    for i in range(1, len(polyline)-1):
-        p_prev = polyline[i-1]
-        p_curr = polyline[i]
-        p_next = polyline[i+1]
-        v1 = (p_curr[0]-p_prev[0], p_curr[1]-p_prev[1])
-        v2 = (p_next[0]-p_curr[0], p_next[1]-p_curr[1])
-        ang = angle_between(v1,v2)
-        current_line.append(p_curr)
-        if ang > angle_threshold:
-            sub_polylines.append(current_line)
-            current_line = [p_curr]
-    current_line.append(polyline[-1])
-    if len(current_line) > 1:
-        sub_polylines.append(current_line)
-    return sub_polylines
-
-def extract_centerline_and_junctions(image_path,
-                                     color_min=(192,72,0),
-                                     color_max=(243,242,219),
-                                     epsilon_factor=0.00002,
-                                     cluster_distance=15,
-                                     angle_threshold=100,
-                                     debug=False):
     img = cv2.imread(image_path)
     if img is None:
-        raise FileNotFoundError(image_path)
+        raise FileNotFoundError(f"Không tìm thấy ảnh tại: {image_path}")
 
-    lower = np.array(color_min, dtype=np.uint8)
-    upper = np.array(color_max, dtype=np.uint8)
-    mask = cv2.inRange(img, lower, upper)
+    mask_color = cv2.inRange(img, np.array(color_min, dtype=np.uint8), np.array(color_max, dtype=np.uint8))
+    img_masked = cv2.bitwise_and(img, img, mask=mask_color)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    gray = cv2.cvtColor(img_masked, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    mask_bool = mask > 0
-    skeleton = skeletonize(mask_bool)
-    skeleton_uint8 = (skeleton * 255).astype(np.uint8)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    clean_binary = np.zeros_like(binary)
+    for i in range(1, num_labels):
+        if stats[i, cv2.CC_STAT_AREA] > min_area:
+            clean_binary[labels == i] = 255
 
-    contours, _ = cv2.findContours(skeleton_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    binary_bool = clean_binary > 0
+    skeleton = skeletonize(binary_bool).astype(np.uint8) * 255
+    height, width = skeleton.shape
 
-    vis = img.copy()
-    all_polylines = []
-    all_vertices = []
+    degree = np.zeros_like(skeleton, dtype=np.uint8)
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            if skeleton[y, x] == 255:
+                degree[y, x] = cv2.countNonZero(skeleton[y-1:y+2, x-1:x+2]) - 1
 
-    for cnt in contours:
-        if cv2.arcLength(cnt, False) < 50:
-            continue
-        epsilon = 0.0003 * cv2.arcLength(cnt, False)
-        approx = cv2.approxPolyDP(cnt, epsilon, False)
-        polyline = [tuple(pt[0]) for pt in approx]
-        all_polylines.append(polyline)
-        all_vertices.extend(polyline)
+    raw_junctions = [(x, y) for y in range(1, height - 1) for x in range(1, width - 1)
+                     if skeleton[y, x] == 255 and degree[y, x] >= 3]
+    endpoints = [(x, y) for y in range(height) for x in range(width)
+                 if skeleton[y, x] == 255 and degree[y, x] == 1]
 
-    all_sub_polylines = []
-    for poly in all_polylines:
-        subs = split_polyline_by_angle(poly, angle_threshold=angle_threshold)
-        all_sub_polylines.extend(subs)
+    def group_points(points, radius=5):
+        grouped = []
+        used = [False] * len(points)
+        for i, (x1, y1) in enumerate(points):
+            if used[i]: continue
+            group = [(x1, y1)]
+            used[i] = True
+            for j, (x2, y2) in enumerate(points):
+                if not used[j] and np.hypot(x1 - x2, y1 - y2) < radius:
+                    group.append((x2, y2))
+                    used[j] = True
+            gx = int(np.mean([p[0] for p in group]))
+            gy = int(np.mean([p[1] for p in group]))
+            grouped.append((gx, gy))
+        return grouped
 
-    junction_points = cluster_points(all_vertices, distance_threshold=cluster_distance)
+    junctions = group_points(raw_junctions, radius=group_radius)
 
-    if debug:
-        for seg in all_sub_polylines:
-            pts_np = np.array(seg, dtype=np.int32)
-            color = tuple(int(c) for c in np.random.randint(0,255,3))
-            cv2.polylines(vis, [pts_np], isClosed=False, color=color, thickness=2)
-        for p in junction_points:
-            cv2.circle(vis, p, 3, (255,0,0), -1)
-        cv2.imshow("Skeleton centerline", skeleton_uint8)       
-        cv2.imshow("Centerline + segments + nút giao", vis)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+    def get_neighbors(x, y):
+        return [(x+dx, y+dy) for dx in [-1,0,1] for dy in [-1,0,1]
+                if (dx != 0 or dy != 0) and 0 <= x+dx < width and 0 <= y+dy < height and skeleton[y+dy, x+dx] == 255]
 
-    return all_sub_polylines, junction_points
+    visited = np.zeros_like(skeleton, dtype=bool)
+    segments = []
+    segments_seen = set()
+
+    def trace_from(start, next_pixel):
+        path = [start]
+        prev = start
+        cur = next_pixel
+        while True:
+            path.append(cur)
+            visited[cur[1], cur[0]] = True
+            if cur in junctions or degree[cur[1], cur[0]] == 1:
+                break
+            neighbors = [n for n in get_neighbors(cur[0], cur[1]) if n != prev and not visited[n[1], n[0]]]
+            if not neighbors:
+                break
+            prev, cur = cur, neighbors[0]
+        return path
+
+    def endpoints_key(a, b):
+        return tuple(sorted([a, b]))
+
+    # --- Thu thập các đoạn ---
+    for j in junctions + endpoints:
+        for nb in get_neighbors(j[0], j[1]):
+            if not visited[nb[1], nb[0]]:
+                seg = trace_from(j, nb)
+                key = endpoints_key(seg[0], seg[-1])
+                if len(seg) > 2 and key not in segments_seen:
+                    segments_seen.add(key)
+                    segments.append(seg)
+
+    for y in range(height):
+        for x in range(width):
+            if skeleton[y, x] == 255 and not visited[y, x]:
+                nbs = get_neighbors(x, y)
+                if nbs:
+                    seg = trace_from((x, y), nbs[0])
+                    key = endpoints_key(seg[0], seg[-1])
+                    if len(seg) > 2 and key not in segments_seen:
+                        segments_seen.add(key)
+                        segments.append(seg)
+
+    # --- Loại bỏ các đoạn chỉ có 1 điểm ---
+    segments = [seg for seg in segments if len(seg) > 2]
+
+    # --- Lấy mẫu đều ---
+    sampled_segments = []
+    for seg in segments:
+        if len(seg) < 2:
+            continue 
+        sampled = [seg[i] for i in range(0, len(seg), sample_spacing)] if len(seg) > sample_spacing else [seg[len(seg)//2]]
+        sampled_segments.append(sampled)
+
+    # --- Tính điểm giữa các junctions ---
+    junction_midpoints = []
+    for j in junctions:
+        neighbors = get_neighbors(j[0], j[1])
+        if len(neighbors) >= 2:
+            mx = int(np.mean([pt[0] for pt in neighbors]))
+            my = int(np.mean([pt[1] for pt in neighbors]))
+            junction_midpoints.append((mx, my))
+
+    return sampled_segments, junctions, junction_midpoints
+
+
+    # if debug:
+    #     debug_img = cv2.cvtColor(skeleton, cv2.COLOR_GRAY2BGR)
+    #     for i, seg in enumerate(sampled_segments):
+    #         pts_np = np.array(seg, dtype=np.int32)
+    #         np.random.seed(i)
+    #         color = tuple(int(c) for c in np.random.randint(0, 255, 3))
+    #         cv2.polylines(debug_img, [pts_np], isClosed=False, color=color, thickness=1)
+    #     for p in junctions:
+    #         cv2.circle(debug_img, tuple(p), 4, (0, 0, 255), -1)
+    #     for p in junction_midpoints:
+    #         cv2.circle(debug_img, tuple(p), 6, (0, 255, 255), -1)
+    #     cv2.imshow("Debug", debug_img)
+    #     cv2.waitKey(0)
+    #     cv2.destroyAllWindows()

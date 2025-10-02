@@ -1,33 +1,141 @@
-def normalize_segment(segment):
-    rev = list(reversed(segment))
-    return tuple(map(tuple, segment)) if segment < rev else tuple(map(tuple, rev))
+import cv2
+import numpy as np
+from skimage.morphology import skeletonize
 
-def merge_segments(segments):
-    unique = {}
+def extract_centerline_and_junctions(image_path, debug=False):
+    # --- Tham số cấu hình ---
+    color_min = (192, 72, 0)
+    color_max = (243, 242, 219)
+    min_area = 500 # diện tích nhỏ nhất để giữ lại
+    group_radius = 30
+    angle_threshold = 30  # độ lệch để xác định điểm gấp khúc
+
+    img = cv2.imread(image_path)
+    if img is None:
+        raise FileNotFoundError(f"Không tìm thấy ảnh tại: {image_path}")
+
+    # --- Tạo mask và xử lý ảnh ---
+    mask_color = cv2.inRange(img, np.array(color_min, dtype=np.uint8), np.array(color_max, dtype=np.uint8))
+    img_masked = cv2.bitwise_and(img, img, mask=mask_color)
+    gray = cv2.cvtColor(img_masked, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # --- Loại bỏ vùng nhỏ ---
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    clean_binary = np.zeros_like(binary)
+    for i in range(1, num_labels):
+        if stats[i, cv2.CC_STAT_AREA] > min_area:
+            clean_binary[labels == i] = 255
+
+    # --- Skeleton hóa ---
+    binary_bool = clean_binary > 0
+    skeleton = skeletonize(binary_bool).astype(np.uint8) * 255
+    height, width = skeleton.shape
+
+    # --- Tính degree ---
+    degree = np.zeros_like(skeleton, dtype=np.uint8)
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            if skeleton[y, x] == 255:
+                degree[y, x] = cv2.countNonZero(skeleton[y-1:y+2, x-1:x+2]) - 1
+
+    # --- Tìm junctions và endpoints ---
+    raw_junctions = [(x, y) for y in range(1, height - 1) for x in range(1, width - 1)
+                     if skeleton[y, x] == 255 and degree[y, x] >= 3]
+    endpoints = [(x, y) for y in range(height) for x in range(width)
+                 if skeleton[y, x] == 255 and degree[y, x] == 1]
+
+    def group_points(points, radius=90):
+        grouped = []
+        used = [False] * len(points)
+        for i, (x1, y1) in enumerate(points):
+            if used[i]: continue
+            group = [(x1, y1)]
+            used[i] = True
+            for j, (x2, y2) in enumerate(points):
+                if not used[j] and np.hypot(x1 - x2, y1 - y2) < radius:
+                    group.append((x2, y2))
+                    used[j] = True
+            gx = int(np.mean([p[0] for p in group]))
+            gy = int(np.mean([p[1] for p in group]))
+            grouped.append((gx, gy))
+        return grouped
+
+    junctions = group_points(raw_junctions, radius=group_radius)
+    junction_set = set(junctions)
+
+    def get_neighbors(x, y):
+        return [(x+dx, y+dy) for dx in [-1,0,1] for dy in [-1,0,1]
+                if (dx != 0 or dy != 0) and 0 <= x+dx < width and 0 <= y+dy < height and skeleton[y+dy, x+dx] == 255]
+
+    visited = np.zeros_like(skeleton, dtype=bool)
+    segments = []
+    segments_seen = set()
+
+    def trace_from(start, next_pixel):
+        path = [start]
+        prev = start
+        cur = next_pixel
+        while True:
+            path.append(cur)
+            visited[cur[1], cur[0]] = True
+            if cur in junctions or degree[cur[1], cur[0]] == 1:
+                break
+            neighbors = [n for n in get_neighbors(cur[0], cur[1]) if n != prev and not visited[n[1], n[0]]]
+            if not neighbors:
+                break
+            prev, cur = cur, neighbors[0]
+        return path
+
+    def endpoints_key(a, b):
+        return tuple(sorted([a, b]))
+
+    for j in junctions + endpoints:
+        for nb in get_neighbors(j[0], j[1]):
+            if not visited[nb[1], nb[0]]:
+                seg = trace_from(j, nb)
+                key = endpoints_key(seg[0], seg[-1])
+                if len(seg) > 2 and key not in segments_seen:
+                    segments_seen.add(key)
+                    segments.append(seg)
+
+    for y in range(height):
+        for x in range(width):
+            if skeleton[y, x] == 255 and not visited[y, x]:
+                nbs = get_neighbors(x, y)
+                if nbs:
+                    seg = trace_from((x, y), nbs[0])
+                    key = endpoints_key(seg[0], seg[-1])
+                    if len(seg) > 2 and key not in segments_seen:
+                        segments_seen.add(key)
+                        segments.append(seg)
+
+    segments = [seg for seg in segments if len(seg) > 2]
+
+    # --- Tách đoạn tại junctions và endpoints (bỏ điểm gấp khúc) ---
+    final_segments = []
     for seg in segments:
-        norm = normalize_segment(seg)
-        unique[norm] = seg
-    merged = []
-    for seg in unique.values():
-        merged.extend(seg)
-    return merged
+        key_points = [seg[0]]
+        for i in range(1, len(seg) - 1):
+            p2 = seg[i]
+            if tuple(p2) in junction_set or tuple(p2) in endpoints:
+                key_points.append(p2)
+        key_points.append(seg[-1])
 
-# -------------------------------
-# Dữ liệu đầu vào
-seg1 = [[6,219],[7,221],[107,221],[108,220],[117,220],[118,219],[126,219],[127,218],[135,218],[136,217],[144,217],[145,216],[155,216],[156,215],[172,214],[173,213],[192,212],[193,211],[200,211],[201,210],[210,210],[211,209],[220,209],[221,208],[229,208],[230,207],[248,206],[249,205],[256,205],[257,204],[273,204],[274,203],[278,203],[280,205],[280,214],[279,215],[279,222],[277,228],[277,237],[276,238],[276,242],[274,245],[273,258],[271,263],[270,275],[269,276],[268,287],[267,288],[266,298],[264,304],[264,309],[263,310],[261,327],[258,331],[257,331]]
-seg2 = [[45,104],[59,91],[63,89],[70,89],[71,88],[86,88],[87,87],[94,87],[95,88],[95,96],[94,97],[94,142],[93,143],[93,154],[92,155],[92,166],[91,167],[91,176],[90,177],[90,187],[89,188],[89,195],[88,196],[88,212],[87,213],[87,220],[86,221],[7,221],[6,219]]
-seg3 = [[112,14],[108,18],[108,30],[107,31],[107,44],[106,45],[106,55],[105,56],[105,60],[102,64],[101,68],[98,73],[96,85],[94,87],[87,87],[86,88],[71,88],[70,89],[63,89],[59,91],[45,104]]
-seg4 = [[257,331],[258,331],[261,327],[261,322],[262,321],[264,304],[265,303],[266,293],[267,292],[268,282],[269,281],[269,276],[270,275],[271,263],[273,258],[274,245],[276,242],[276,238],[277,237],[277,228],[278,227],[279,215],[280,214],[280,205],[279,204],[280,202],[300,199],[304,196],[314,196],[315,195],[327,194],[328,193],[331,193],[332,192],[335,192],[344,189],[348,189],[349,188],[352,188],[361,185],[365,185],[369,183],[373,183],[391,177],[405,174],[412,171],[426,168],[437,163],[448,160],[451,158],[459,156],[470,151],[486,146],[489,144],[492,144],[497,141],[513,136],[516,134],[523,133],[527,130],[529,125],[531,123]]
-seg5 = [[297,115],[298,117],[298,133],[299,134],[299,137],[302,141],[303,147],[304,148],[304,152],[303,153],[303,166],[302,167],[302,187],[301,188],[301,194],[303,196],[302,198],[300,199],[296,199],[295,200],[291,200],[290,201],[283,201],[279,203],[274,203],[273,204],[257,204],[256,205],[249,205],[248,206],[230,207],[229,208],[211,209],[210,210],[201,210],[200,211],[193,211],[192,212],[173,213],[172,214],[164,214],[163,215],[156,215],[155,216],[145,216],[144,217],[136,217],[135,218],[127,218],[126,219],[118,219],[117,220],[108,220],[107,221],[88,221],[87,220],[87,213],[88,212],[88,196],[89,195],[89,188],[90,187],[90,177],[91,176],[92,155],[93,154],[93,143],[94,142],[94,97],[95,96],[95,86],[97,82],[97,76],[101,68],[102,64],[105,60],[105,56],[106,55],[107,31],[108,30],[108,18],[113,14]]
-seg6 = [[531,51],[530,52],[530,53],[528,55],[528,56],[527,57],[525,57],[524,58],[521,58],[520,59],[518,59],[517,60],[515,60],[514,61],[512,61],[511,62],[510,62],[509,63],[507,63],[506,64],[505,64],[504,65],[502,65],[501,66],[500,66],[499,67],[497,67],[496,68],[495,68],[494,69],[493,69],[492,70],[490,70],[489,71],[488,71],[487,72],[486,72],[485,73],[483,73],[482,74],[481,74],[480,75],[479,75],[478,76],[476,76],[475,77],[474,77],[473,78],[472,78],[471,79],[470,79],[469,80],[468,80],[467,81],[465,81],[464,82],[463,82],[462,83],[461,83],[460,84],[458,84],[457,85],[455,85],[454,86],[453,86],[452,87],[450,87],[449,88],[448,88],[447,89],[445,89],[444,90],[442,90],[441,91],[440,91],[439,92],[437,92],[436,93],[434,93],[433,94],[432,94],[431,95],[430,95],[429,96],[427,96],[426,97],[424,97],[423,98],[422,98],[421,99],[420,99],[419,100],[416,100],[415,101],[413,101],[412,102],[410,102],[409,103],[407,103],[406,104],[404,104],[403,105],[402,105],[401,106],[398,106],[397,107],[395,107],[394,108],[393,108],[392,109],[389,109],[388,110],[386,110],[385,111],[383,111],[382,112],[380,112],[379,113],[377,113],[376,114],[375,114],[374,115],[372,115]]
-seg7 = [[531,123],[529,125],[527,130],[523,133],[516,134],[513,136],[497,141],[492,144],[489,144],[486,146],[470,151],[467,153],[451,158],[448,160],[437,163],[426,168],[412,171],[405,174],[391,177],[373,183],[369,183],[365,185],[361,185],[360,186],[357,186],[348,189],[344,189],[343,190],[340,190],[339,191],[336,191],[327,194],[315,195],[314,196],[303,196],[301,194],[301,188],[302,187],[302,167],[303,166],[303,153],[304,152],[304,148],[303,147],[302,141],[300,139],[298,133],[298,117],[297,115]]
+        # Tách thành các đoạn 2 điểm
+        for i in range(len(key_points) - 1):
+            a, b = key_points[i], key_points[i + 1]
+            if a != b:
+                final_segments.append([a, b])
 
-all_segments = [seg1, seg2, seg3, seg4, seg5, seg6, seg7]
+    # --- Tính điểm giữa các junctions ---
+    junction_midpoints = []
+    for j in junctions:
+        neighbors = get_neighbors(j[0], j[1])
+        if len(neighbors) >= 2:
+            mx = int(np.mean([pt[0] for pt in neighbors]))
+            my = int(np.mean([pt[1] for pt in neighbors]))
+            junction_midpoints.append((mx, my))
 
-merged = merge_segments(all_segments)
-
-# Lưu ra file txt
-with open("merged.txt", "w", encoding="utf-8") as f:
-    f.write(",".join([f"[{x},{y}]" for x, y in merged]))
-
-print("✅ Đã ghi merged.txt với", len(merged), "tọa độ")
+    return final_segments, junctions, junction_midpoints

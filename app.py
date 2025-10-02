@@ -52,10 +52,10 @@ def process_image():
         cv2.putText(vis, label, mid_point, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 1, cv2.LINE_AA)
 
     for p in junctions:
-        cv2.circle(vis, tuple(p), 4, (0, 0, 255), -1)
+        cv2.circle(vis, tuple(p), 1, (255, 0, 0), -1) # Vẽ điểm đỏ nhỏ hơn
 
     for p in junction_midpoints:
-        cv2.circle(vis, tuple(p), 6, (0, 255, 255), -1)
+        cv2.circle(vis, tuple(p), 4, (0, 255, 0), -1) # Vẽ điểm vàng lớn hơn
 
     result_path = os.path.join(app.static_folder, "result.jpg")
     cv2.imwrite(result_path, vis)
@@ -81,4 +81,5 @@ def process_image():
     })
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
+
