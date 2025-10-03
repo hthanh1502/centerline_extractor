@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import random
+import os
 from skimage.morphology import skeletonize
 
 def extract_centerline_and_junctions(image_path, debug=False):
@@ -8,20 +9,60 @@ def extract_centerline_and_junctions(image_path, debug=False):
     if img is None:
         raise FileNotFoundError("Không tìm thấy ảnh gốc.")
 
-    # Lọc màu
-    color_min = np.array([170, 72, 0], dtype=np.uint8) # BGR
-    color_max = np.array([230, 242, 219], dtype=np.uint8)
-    mask = cv2.inRange(img, color_min, color_max)
-    filtered = cv2.bitwise_and(img, img, mask=mask)
 
-    # Chuyển sang ảnh xám và nhị phân
-    gray = cv2.cvtColor(filtered, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+
+
+    # Lọc màu đường (BGR)
+    color_min_tong = np.array([0, 0, 0], dtype=np.uint8)
+    color_max_tong = np.array([235, 227, 244], dtype=np.uint8)
+    
+
+    color_min_duong = np.array([170, 72, 0], dtype=np.uint8)
+    color_max_duong = np.array([230, 242, 219], dtype=np.uint8)
+    
+
+    # Lọc màu chữ (BGR)
+    color_min_chu = np.array([0, 0, 0], dtype=np.uint8)
+    color_max_chu = np.array([213, 231, 243], dtype=np.uint8)
+    
+    # 3 mask chính
+    mask_duong_tong = cv2.inRange(img, color_min_tong, color_max_tong)
+
+    mask_duong_raw = cv2.inRange(img, color_min_duong, color_max_duong)
+
+    mask_chu = cv2.inRange(img, color_min_chu, color_max_chu)
+
+    
+
+    mask_duong = cv2.bitwise_and(mask_duong_raw, mask_duong_raw, mask=cv2.bitwise_not(mask_chu))
+
+    # Bước 1: Tạo mask đường đầy đủ bằng cách loại bỏ chữ khỏi mask tổng
+    mask_road_full = cv2.bitwise_and(mask_duong_tong, cv2.bitwise_not(mask_chu))
+
+    # Bước 2: Kết hợp mask đường ban đầu (đã có chi tiết) với mask đường đầy đủ
+    mask_road_clean = cv2.bitwise_or(mask_duong, mask_road_full)
+
+    # Bước 3: Làm mịn và khôi phục các đoạn bị đứt bằng morphology
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)) 
+    mask_road_clean = cv2.morphologyEx(mask_road_clean, cv2.MORPH_CLOSE, kernel)
+
+
+
+
+    # Loại bỏ chữ khỏi mask đường
+
+    # Tạo thư mục và lưu ảnh
+    mask_tong = cv2.bitwise_or(mask_duong_raw, mask_chu)
+    cv2.imwrite("output/mask_tong.png", mask_duong_tong)
+    os.makedirs("output", exist_ok=True)
+    cv2.imwrite("output/mask_duong.png", mask_duong)
+    cv2.imwrite("output/mask_chu.png", mask_chu)
+    cv2.imwrite("output/mask_road_clean.png", mask_road_clean)
 
     # Loại bỏ vùng nhỏ
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    clean_binary = np.zeros_like(binary)
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask_duong, connectivity=8)
+    clean_binary = np.zeros_like(mask_duong)
     for i in range(1, num_labels):
         if stats[i, cv2.CC_STAT_AREA] > 500:
             clean_binary[labels == i] = 255
@@ -70,7 +111,7 @@ def extract_centerline_and_junctions(image_path, debug=False):
                     continue
                 nx, ny = x + dx, y + dy
                 if 0 <= nx < width and 0 <= ny < height:
-                    if skeleton[ny, nx] == 255: #màu trắng
+                    if skeleton[ny, nx] == 255:
                         neighbors.append((nx, ny))
         return neighbors
 
@@ -135,11 +176,20 @@ def extract_centerline_and_junctions(image_path, debug=False):
         simplified = simplify_segment(segment, epsilon=2.0)
         sampled_segments.append(simplified)
 
-    # Sắp xếp đoạn theo vị trí nút giao , hay nói cách khác là sọt
+    # Sắp xếp đoạn theo vị trí nút giao
     junction_midpoints = [tuple(seg[len(seg)//2]) for seg in sampled_segments if len(seg) >= 2]
     sorted_data = sorted(zip(sampled_segments, junction_midpoints), key=lambda item: (item[1][1], item[1][0]))
     sampled_segments, junction_midpoints = zip(*sorted_data) if sorted_data else ([], [])
     sampled_segments = list(sampled_segments)
     junction_midpoints = list(junction_midpoints)
+
+    if debug:
+        cv2.imshow("Mask Duong Raw", mask_duong_raw)
+        cv2.imshow("Mask Chu", mask_chu)
+        cv2.imshow("Mask Duong", mask_duong)
+        cv2.imshow("Clean Binary", clean_binary)
+        cv2.imshow("Skeleton", skeleton)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     return sampled_segments, junctions, junction_midpoints
