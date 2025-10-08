@@ -9,47 +9,68 @@ def extract_centerline_and_junctions(image_path, debug=False):
     if img is None:
         raise FileNotFoundError("Không tìm thấy ảnh gốc.")
 
+
+
+
+
     # Lọc màu đường (BGR)
     color_min_tong = np.array([0, 0, 0], dtype=np.uint8)
     color_max_tong = np.array([246, 225, 255], dtype=np.uint8)
+    
 
     color_min_duong = np.array([170, 0, 0], dtype=np.uint8)
     color_max_duong = np.array([255, 229, 255], dtype=np.uint8)
+    
 
     # Lọc màu chữ (BGR)
     color_min_chu = np.array([0, 0, 0], dtype=np.uint8)
     color_max_chu = np.array([255, 198, 246], dtype=np.uint8)
-
-    # Tạo các mask
+    
+    # 3 mask chính
     mask_duong_tong = cv2.inRange(img, color_min_tong, color_max_tong)
+
     mask_duong_raw = cv2.inRange(img, color_min_duong, color_max_duong)
+
     mask_chu = cv2.inRange(img, color_min_chu, color_max_chu)
 
+    
+
     mask_duong = cv2.bitwise_and(mask_duong_raw, mask_duong_raw, mask=cv2.bitwise_not(mask_chu))
+
+    # Bước 1: Tạo mask đường đầy đủ bằng cách loại bỏ chữ khỏi mask tổng
     mask_road_full = cv2.bitwise_and(mask_duong_tong, cv2.bitwise_not(mask_chu))
+
+    # Bước 2: Kết hợp mask đường ban đầu (đã có chi tiết) với mask đường đầy đủ
     mask_road_clean = cv2.bitwise_or(mask_duong_tong, mask_road_full)
 
-    # Morphology để làm mịn và loại bỏ nhiễu
+    # Bước 3: Làm mịn và khôi phục các đoạn bị đứt bằng morphology
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (8, 8)) 
+
+
     kernel_noise = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     mask_road_clean = cv2.morphologyEx(mask_road_clean, cv2.MORPH_OPEN, kernel_noise)
+    
+    # kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    # mask_closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    # Thêm morphological closing để nối các đoạn gần nhau (bỏ comment nếu cần)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (8, 8))
+
+
     mask_road_clean = cv2.morphologyEx(mask_road_clean, cv2.MORPH_CLOSE, kernel)
 
-    # === Distance Transform + Bridging để nối các đoạn gần nhau ===
-    dist = cv2.distanceTransform(mask_road_clean, cv2.DIST_L2, 5)
-    _, dist_thresh = cv2.threshold(dist, 10, 255, cv2.THRESH_BINARY)
-    dist_thresh = dist_thresh.astype(np.uint8)
+#    mask_road_clean loại bỏ đường trường hợp chữ nằm trên đường , giờ cần xử lí trường hợp cữ chữ nằm sát đường
 
-    kernel_bridge = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-    mask_bridge = cv2.dilate(dist_thresh, kernel_bridge, iterations=1)
 
-    mask_road_clean = cv2.bitwise_or(mask_road_clean, mask_bridge)
+    
 
-    # Lưu ảnh mask
+
+
+
+    # Loại bỏ chữ khỏi mask đường
+
+    # Tạo thư mục và lưu ảnh
+    mask_tong = cv2.bitwise_or(mask_duong_raw, mask_chu)
+    cv2.imwrite("output/mask_tong.png", mask_duong_tong)
     os.makedirs("output", exist_ok=True)
-    cv2.imwrite("output/mask_duong_tong.png", mask_duong_tong)
     cv2.imwrite("output/mask_duong.png", mask_duong)
     cv2.imwrite("output/mask_chu.png", mask_chu)
     cv2.imwrite("output/mask_road_clean.png", mask_road_clean)
@@ -64,6 +85,7 @@ def extract_centerline_and_junctions(image_path, debug=False):
     # Skeleton hóa
     binary_bool = clean_binary > 0
     skeleton = skeletonize(binary_bool).astype(np.uint8) * 255
+
     height, width = skeleton.shape
 
     # Tìm nút giao
@@ -94,6 +116,10 @@ def extract_centerline_and_junctions(image_path, debug=False):
 
     endpoints = [(x, y) for y in range(height) for x in range(width)
                  if skeleton[y, x] == 255 and degree[y, x] == 1]
+    # for p1 in endpoints:
+        # for p2 in endpoints:
+            # if p1 != p2 and np.linalg.norm(np.array(p1) - np.array(p2)) < 30:
+                # cv2.line(skeleton, p1, p2, 255, 1)
 
     # Truy vết đoạn
     def get_neighbors(x, y):
@@ -169,6 +195,7 @@ def extract_centerline_and_junctions(image_path, debug=False):
         simplified = simplify_segment(segment, epsilon=2.0)
         sampled_segments.append(simplified)
 
+    # Sắp xếp đoạn theo vị trí nút giao
     junction_midpoints = [tuple(seg[len(seg)//2]) for seg in sampled_segments if len(seg) >= 2]
     sorted_data = sorted(zip(sampled_segments, junction_midpoints), key=lambda item: (item[1][1], item[1][0]))
     sampled_segments, junction_midpoints = zip(*sorted_data) if sorted_data else ([], [])
@@ -185,3 +212,4 @@ def extract_centerline_and_junctions(image_path, debug=False):
         cv2.destroyAllWindows()
 
     return sampled_segments, junctions, junction_midpoints
+
