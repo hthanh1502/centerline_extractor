@@ -33,7 +33,7 @@ def extract_centerline_and_junctions(image_path, debug=False):
     kernel_noise = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     mask_road_clean = cv2.morphologyEx(mask_road_clean, cv2.MORPH_OPEN, kernel_noise)
 
-    # Thêm morphological closing để nối các đoạn gần nhau (bỏ comment nếu cần)
+    # Thêm morphological closing để nối các đoạn gần nhau 
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (8, 8))
     mask_road_clean = cv2.morphologyEx(mask_road_clean, cv2.MORPH_CLOSE, kernel)
 
@@ -132,7 +132,9 @@ def extract_centerline_and_junctions(image_path, debug=False):
         for (nx, ny) in get_neighbors(x, y):
             if not visited[ny, nx]:
                 segment = trace_segment((x, y), (nx, ny))
-                if len(segment) > 2:
+                start, end = segment[0], segment[-1]
+                length = np.hypot(end[0] - start[0], end[1] - start[1])
+                if length > 10:
                     endpoints_pair = tuple(sorted([segment[0], segment[-1]]))
                     if endpoints_pair not in segments_seen:
                         segments_seen.add(endpoints_pair)
