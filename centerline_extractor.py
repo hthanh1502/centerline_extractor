@@ -11,14 +11,13 @@ def extract_centerline_and_junctions(image_path, debug=False):
 
     # Lọc màu đường (BGR)
     color_min_tong = np.array([0, 0, 0], dtype=np.uint8)
-    color_max_tong = np.array([246, 225, 255], dtype=np.uint8)
+    color_max_tong = np.array([232, 236, 255], dtype=np.uint8)
 
     color_min_duong = np.array([170, 0, 0], dtype=np.uint8)
     color_max_duong = np.array([255, 229, 255], dtype=np.uint8)
 
-    # Lọc màu chữ (BGR)
     color_min_chu = np.array([0, 0, 0], dtype=np.uint8)
-    color_max_chu = np.array([255, 198, 246], dtype=np.uint8)
+    color_max_chu = np.array([255, 180, 255], dtype=np.uint8)
 
     # Tạo các mask
     mask_duong_tong = cv2.inRange(img, color_min_tong, color_max_tong)
