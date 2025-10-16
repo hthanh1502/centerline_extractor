@@ -19,8 +19,17 @@ def extract_centerline_and_junctions(image_path, debug=False):
     color_min_chu = np.array([0, 0, 0], dtype=np.uint8)
     color_max_chu = np.array([255, 180, 255], dtype=np.uint8)
 
+
+    color_min_cam = np.array([0, 100, 200], dtype=np.uint8)
+    color_max_cam = np.array([80, 180, 255], dtype=np.uint8)
+    mask_cam = cv2.inRange(img, color_min_cam, color_max_cam)
+
+
+
     # Tạo các mask
     mask_duong_tong = cv2.inRange(img, color_min_tong, color_max_tong)
+    mask_duong_tong = cv2.bitwise_and(mask_duong_tong, cv2.bitwise_not(mask_cam))
+
     mask_duong_raw = cv2.inRange(img, color_min_duong, color_max_duong)
     mask_chu = cv2.inRange(img, color_min_chu, color_max_chu)
 
@@ -38,13 +47,15 @@ def extract_centerline_and_junctions(image_path, debug=False):
 
     # === Distance Transform + Bridging để nối các đoạn gần nhau ===
     dist = cv2.distanceTransform(mask_road_clean, cv2.DIST_L2, 5)
-    _, dist_thresh = cv2.threshold(dist, 10, 255, cv2.THRESH_BINARY)
+    _, dist_thresh = cv2.threshold(dist, 5, 255, cv2.THRESH_BINARY)
     dist_thresh = dist_thresh.astype(np.uint8)
 
-    kernel_bridge = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    kernel_bridge = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
     mask_bridge = cv2.dilate(dist_thresh, kernel_bridge, iterations=1)
 
     mask_road_clean = cv2.bitwise_or(mask_road_clean, mask_bridge)
+
+  
 
     # Lưu ảnh mask
     os.makedirs("output", exist_ok=True)
@@ -106,11 +117,11 @@ def extract_centerline_and_junctions(image_path, debug=False):
                     if skeleton[ny, nx] == 255:
                         neighbors.append((nx, ny))
         return neighbors
-
+#   print(f"Junctions found: {len(junctions)}, Endpoints found: {len(endpoints)}")
     visited = np.zeros_like(skeleton, dtype=bool)
     segments = []
     segments_seen = set()
-
+# hàm truy vết đoạn từ điểm bắt đầu đến khi gặp nút giao hoặc điểm cuối
     def trace_segment(start, next_pixel):
         path = [start]
         stack = [(next_pixel, start)]
@@ -121,6 +132,8 @@ def extract_centerline_and_junctions(image_path, debug=False):
             visited[cy, cx] = True
             path.append((cx, cy))
             if (cx, cy) in junctions or (cx, cy) in endpoints or cx == 0 or cy == 0 or cx == width - 1 or cy == height - 1:
+                break
+            if (cx, cy) in junctions and len(path) > 5:  # chỉ dừng nếu đã đi đủ xa
                 break
             neighbors = [n for n in get_neighbors(cx, cy) if n != prev and not visited[n[1], n[0]]]
             for n in neighbors:
@@ -133,7 +146,7 @@ def extract_centerline_and_junctions(image_path, debug=False):
                 segment = trace_segment((x, y), (nx, ny))
                 start, end = segment[0], segment[-1]
                 length = np.hypot(end[0] - start[0], end[1] - start[1])
-                if length > 10:
+                if length > 13:
                     endpoints_pair = tuple(sorted([segment[0], segment[-1]]))
                     if endpoints_pair not in segments_seen:
                         segments_seen.add(endpoints_pair)
@@ -157,8 +170,8 @@ def extract_centerline_and_junctions(image_path, debug=False):
             gy = int(np.mean([pt[1] for pt in group]))
             grouped.append((gx, gy))
         return grouped
-
-    def simplify_segment(segment, epsilon=2.0):
+# hàm đơn giản hóa đoạn bằng thuật toán Ramer-Douglas-Peucker
+    def simplify_segment(segment, epsilon=1.0):
         contour = np.array(segment, dtype=np.int32).reshape((-1, 1, 2))
         simplified = cv2.approxPolyDP(contour, epsilon, False)
         return [tuple(pt[0]) for pt in simplified]
@@ -175,6 +188,9 @@ def extract_centerline_and_junctions(image_path, debug=False):
     sampled_segments, junction_midpoints = zip(*sorted_data) if sorted_data else ([], [])
     sampled_segments = list(sampled_segments)
     junction_midpoints = list(junction_midpoints)
+
+
+
 
     if debug:
         cv2.imshow("Mask Duong Raw", mask_duong_raw)
