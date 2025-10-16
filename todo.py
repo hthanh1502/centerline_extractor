@@ -62,9 +62,6 @@ def extract_centerline_and_junctions(image_path, debug=False):
 
     
 
-
-
-
     # Loại bỏ chữ khỏi mask đường
 
     # Tạo thư mục và lưu ảnh
