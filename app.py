@@ -48,8 +48,8 @@ def process_image():
         # mid_point = (mid_point[0], mid_point[1] - 10)
 
 
-        label = f"{i + 1}"
-        cv2.putText(vis, label, mid_point, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 1, cv2.LINE_AA)
+        # label = f"{i + 1}"
+        # cv2.putText(vis, label, mid_point, cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 1, cv2.LINE_AA)
 
     for p in junctions:
         cv2.circle(vis, tuple(p), 0, (255, 0, 0), -1) # Vẽ điểm đỏ nhỏ hơn
